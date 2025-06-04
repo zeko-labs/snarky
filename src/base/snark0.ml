@@ -1238,7 +1238,12 @@ module Run = struct
       state := Backend.Run_state.set_stack !state (lbl :: stack) ;
       Option.iter log_constraint ~f:(fun f ->
           f ~at_label_boundary:(`Start, lbl) None ) ;
-      let a = x () in
+      let a =
+        try x ()
+        with e ->
+          fprintf stderr "with_label: failed in %s\n" lbl ;
+          raise e
+      in
       Option.iter log_constraint ~f:(fun f ->
           f ~at_label_boundary:(`End, lbl) None ) ;
       state := Backend.Run_state.set_stack !state stack ;
