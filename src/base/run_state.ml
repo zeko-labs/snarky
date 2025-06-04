@@ -56,7 +56,6 @@ struct
     ; has_witness : bool
     ; stack : string list
     ; handler : Request.Handler.t
-    ; is_running : bool
     ; as_prover : bool ref
     ; log_constraint :
         (   ?at_label_boundary:[ `Start | `End ] * string
@@ -66,8 +65,7 @@ struct
     }
 
   let make ~num_inputs ~input ~next_auxiliary ~aux ?system ~eval_constraints
-      ?log_constraint ?handler ~with_witness ?(stack = []) ?(is_running = true)
-      () =
+      ?log_constraint ?handler ~with_witness ?(stack = []) () =
     next_auxiliary := num_inputs ;
     (* We can't evaluate the constraints if we are not computing over a value. *)
     let eval_constraints = eval_constraints && with_witness in
@@ -83,16 +81,15 @@ struct
     ; has_witness = with_witness
     ; stack
     ; handler = Option.value handler ~default:Request.Handler.fail
-    ; is_running
     ; as_prover = ref false
     ; log_constraint
     }
 
   let dump (t : t) =
     Format.sprintf
-      "state { is_running: %B; as_prover: %B; has_witness: %B; \
-       eval_constraints: %B; num_inputs: %d; next_auxiliary: %d }\n"
-      t.is_running !(t.as_prover) t.has_witness t.eval_constraints t.num_inputs
+      "state { as_prover: %B; has_witness: %B; eval_constraints: %B; \
+       num_inputs: %d; next_auxiliary: %d }\n"
+      !(t.as_prover) t.has_witness t.eval_constraints t.num_inputs
       !(t.next_auxiliary)
 
   let get_variable_value { num_inputs; input; aux; _ } : int -> field =
@@ -129,10 +126,6 @@ struct
   let handler { handler; _ } = handler
 
   let set_handler t handler = { t with handler }
-
-  let is_running { is_running; _ } = is_running
-
-  let set_is_running t is_running = { t with is_running }
 
   let next_auxiliary { next_auxiliary; _ } = !next_auxiliary
 end

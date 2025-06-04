@@ -1319,6 +1319,8 @@ module type Run_basic = sig
 
   val make_checked : (unit -> 'a) -> 'a Internal_Basic.Checked.t
 
+  val make_as_prover : (unit -> 'a) As_prover.t -> 'a Internal_Basic.As_prover.t
+
   val constraint_system :
        input_typ:('input_var, 'input_value) Typ.t
     -> return_typ:('a, _) Typ.t
