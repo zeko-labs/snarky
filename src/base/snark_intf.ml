@@ -256,6 +256,13 @@ module type Typ_intf = sig
           [Checked] world to pass through [As_prover] blocks.
     *)
   val prover_value : unit -> ('a prover_value, 'a) t
+
+  val prover_value_map : 'a prover_value -> f:('a -> 'b) -> 'b prover_value
+
+  val prover_value_bind :
+    'a prover_value -> f:('a -> 'b prover_value) -> 'b prover_value
+
+  val prover_value_return : 'a -> 'a prover_value
 end
 
 module type Constraint_intf = sig

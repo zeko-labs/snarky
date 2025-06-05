@@ -102,6 +102,12 @@ struct
           ; constraint_system_auxiliary = (fun () -> None)
           ; check = (fun _ -> Checked.return ())
           }
+
+      let prover_value_map = Option.map
+
+      let prover_value_bind = Option.bind
+
+      let prover_value_return = Option.return
     end
 
     let transport (type var value1 value2)

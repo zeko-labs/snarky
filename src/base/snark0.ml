@@ -789,6 +789,12 @@ module Run = struct
       type nonrec 'a prover_value = 'a prover_value
 
       let prover_value = prover_value
+
+      let prover_value_map = prover_value_map
+
+      let prover_value_bind = prover_value_bind
+
+      let prover_value_return = prover_value_return
     end
 
     let constant (Typ typ : _ Typ.t) x =
