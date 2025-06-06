@@ -710,7 +710,8 @@ module Run = struct
     let dump () = Backend.Run_state.dump @@ Option.value_exn !state
 
     let in_prover () : bool =
-      Backend.Run_state.has_witness @@ Option.value_exn !state
+      Option.map ~f:Backend.Run_state.has_witness !state
+      |> Option.value ~default:false
 
     let in_checked_computation () : bool =
       is_active_functor_id this_functor_id && Option.is_some !state
