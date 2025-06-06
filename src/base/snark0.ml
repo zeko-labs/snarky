@@ -707,7 +707,17 @@ module Run = struct
 
     let state : Backend.Run_state.t option ref = ref None
 
-    let dump () = Backend.Run_state.dump @@ Option.value_exn !state
+    open struct
+      let get_state ~pos:(pos_fname, pos_lnum, pos_bol, pos_cnum) () =
+        Option.value_exn
+          ~here:{ pos_fname; pos_lnum; pos_bol; pos_cnum }
+          ~message:
+            "Snark.Run: No global checked computation happening. Try wrapping \
+             in make_checked."
+          !state
+    end
+
+    let dump () = Backend.Run_state.dump @@ get_state ~pos:__POS__ ()
 
     let in_prover () : bool =
       Option.map ~f:Backend.Run_state.has_witness !state
@@ -731,7 +741,7 @@ module Run = struct
           else if not (Option.is_some !state) then
             failwith
               "This function can't be run outside of a checked computation." ;
-          let state' = Option.value_exn !state in
+          let state' = get_state ~pos:__POS__ () in
           state := None ;
           let state', x = Runner.run checked state' in
           state := Some state' ;
@@ -741,7 +751,7 @@ module Run = struct
       let cached_state = !state in
       state := Some state' ;
       let a = x () in
-      let new_state = Option.value_exn !state in
+      let new_state = get_state ~pos:__POS__ () in
       state := cached_state ;
       (new_state, a)
 
@@ -1117,15 +1127,23 @@ module Run = struct
     module As_prover = struct
       let global_tbl = ref None
 
+      let get_tbl ~pos:(pos_fname, pos_lnum, pos_bol, pos_cnum) () =
+        Option.value_exn
+          ~here:{ pos_fname; pos_lnum; pos_bol; pos_cnum }
+          ~message:
+            "Snark.Run: No global As_prover instance. Try wrapping in \
+             make_as_prover."
+          !global_tbl
+
       type 'a t = 'a
 
       type 'a as_prover = 'a t
 
       let in_prover_block () = Option.is_some !global_tbl
 
-      let read_var var = As_prover.read_var var (Option.value_exn !global_tbl)
+      let read_var var = As_prover.read_var var (get_tbl ~pos:__POS__ ())
 
-      let read typ var = As_prover.read typ var (Option.value_exn !global_tbl)
+      let read typ var = As_prover.read typ var (get_tbl ~pos:__POS__ ())
 
       include Field.Constant.T
 
@@ -1143,7 +1161,7 @@ module Run = struct
       type ('var, 'value) t = ('var, 'value) Handle.t
 
       let value handle () =
-        Handle.value handle (Option.value_exn !As_prover.global_tbl)
+        Handle.value handle (As_prover.get_tbl ~pos:__POS__ ())
 
       let var = Handle.var
     end
@@ -1220,14 +1238,15 @@ module Run = struct
 
     let handle x h =
       let h = Request.Handler.create_single h in
-      let handler = Backend.Run_state.handler @@ Option.value_exn !state in
+      let handler = Backend.Run_state.handler @@ get_state ~pos:__POS__ () in
       state :=
         Some
-          (Backend.Run_state.set_handler (Option.value_exn !state)
+          (Backend.Run_state.set_handler
+             (get_state ~pos:__POS__ ())
              (Request.Handler.push handler h) ) ;
       let a = x () in
       state :=
-        Some (Backend.Run_state.set_handler (Option.value_exn !state) handler) ;
+        Some (Backend.Run_state.set_handler (get_state ~pos:__POS__ ()) handler) ;
       a
 
     let handle_as_prover x h =
@@ -1237,13 +1256,15 @@ module Run = struct
     let if_ b ~typ ~then_ ~else_ = run (if_ b ~typ ~then_ ~else_)
 
     let with_label lbl x =
-      let stack = Backend.Run_state.stack @@ Option.value_exn !state in
+      let stack = Backend.Run_state.stack @@ get_state ~pos:__POS__ () in
       let log_constraint =
-        Backend.Run_state.log_constraint @@ Option.value_exn !state
+        Backend.Run_state.log_constraint @@ get_state ~pos:__POS__ ()
       in
       state :=
         Some
-          (Backend.Run_state.set_stack (Option.value_exn !state) (lbl :: stack)) ;
+          (Backend.Run_state.set_stack
+             (get_state ~pos:__POS__ ())
+             (lbl :: stack) ) ;
       Option.iter log_constraint ~f:(fun f ->
           f ~at_label_boundary:(`Start, lbl) None ) ;
       let a =
@@ -1255,7 +1276,7 @@ module Run = struct
       Option.iter log_constraint ~f:(fun f ->
           f ~at_label_boundary:(`End, lbl) None ) ;
       state :=
-        Some (Backend.Run_state.set_stack (Option.value_exn !state) stack) ;
+        Some (Backend.Run_state.set_stack (get_state ~pos:__POS__ ()) stack) ;
       a
 
     let inject_wrapper :
@@ -1328,7 +1349,7 @@ module Run = struct
         (* Create an invalid state, to avoid re-runs. *)
         cached_active_counters := None ;
         (* Partial [as_stateful]. *)
-        let state' = Option.value_exn !state in
+        let state' = get_state ~pos:__POS__ () in
         let res = builder.finish_computation (state', return_var) in
         (* Partial [finalize_is_running]. *)
         state := Option.value_exn !cached_state ;
@@ -1388,7 +1409,7 @@ module Run = struct
         (* Create an invalid state, to avoid re-runs. *)
         cached_active_counters := None ;
         (* Partial [as_stateful]. *)
-        let state' = Option.value_exn !state in
+        let state' = get_state ~pos:__POS__ () in
         let res = builder.finish_witness_generation (state', return_var) in
         (* Partial [finalize_is_running]. *)
         state := Option.value_exn !cached_state ;
@@ -1399,7 +1420,7 @@ module Run = struct
     (* start an as_prover / exists block and return a function to finish it and witness a given list of fields *)
     let as_prover_manual (size_to_witness : int) :
         (field array option -> Field.t array) Staged.t =
-      let s = Option.value_exn !state in
+      let s = get_state ~pos:__POS__ () in
       let old_as_prover = Backend.Run_state.as_prover s in
       (* enter the as_prover block *)
       Backend.Run_state.set_as_prover s true ;
@@ -1433,18 +1454,18 @@ module Run = struct
 
     let request_manual (req : unit -> 'a Request.t) () : 'a =
       Request.Handler.run
-        (Backend.Run_state.handler @@ Option.value_exn !state)
+        (Backend.Run_state.handler @@ get_state ~pos:__POS__ ())
         (req ())
       |> Option.value_exn ~message:"Unhandled request"
 
     module Async_generic (Promise : Base.Monad.S) = struct
       let run_prover ~(else_ : unit -> 'a) (f : unit -> 'a Promise.t) :
           'a Promise.t =
-        if Backend.Run_state.has_witness (Option.value_exn !state) then (
-          let old = Backend.Run_state.as_prover (Option.value_exn !state) in
-          Backend.Run_state.set_as_prover (Option.value_exn !state) true ;
+        if Backend.Run_state.has_witness (get_state ~pos:__POS__ ()) then (
+          let old = Backend.Run_state.as_prover (get_state ~pos:__POS__ ()) in
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
           let%map.Promise result = f () in
-          Backend.Run_state.set_as_prover (Option.value_exn !state) old ;
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) old ;
           result )
         else Promise.return (else_ ())
 
@@ -1464,11 +1485,12 @@ module Run = struct
             Perform.run_and_check_exn ~run:as_stateful (fun () ->
                 mark_active ~f:(fun () ->
                     let prover_block = x () in
-                    Backend.Run_state.set_as_prover (Option.value_exn !state)
+                    Backend.Run_state.set_as_prover
+                      (get_state ~pos:__POS__ ())
                       true ;
                     As_prover.run_prover prover_block ) )
           in
-          Backend.Run_state.set_as_prover (Option.value_exn !state) true ;
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
           res )
 
     let run_and_check (type a) (x : unit -> (unit -> a) As_prover.t) :
@@ -1478,11 +1500,12 @@ module Run = struct
             Perform.run_and_check ~run:as_stateful (fun () ->
                 mark_active ~f:(fun () ->
                     let prover_block = x () in
-                    Backend.Run_state.set_as_prover (Option.value_exn !state)
+                    Backend.Run_state.set_as_prover
+                      (get_state ~pos:__POS__ ())
                       true ;
                     As_prover.run_prover prover_block ) )
           in
-          Backend.Run_state.set_as_prover (Option.value_exn !state) true ;
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
           res )
 
     module Run_and_check_deferred (M : sig
@@ -1512,7 +1535,7 @@ module Run = struct
         let cached_state = !state in
         state := Some state' ;
         map (x ()) ~f:(fun a ->
-            let new_state = Option.value_exn !state in
+            let new_state = get_state ~pos:__POS__ () in
             state := cached_state ;
             (new_state, a) )
 
@@ -1525,10 +1548,11 @@ module Run = struct
                   mark_active ~f:(fun () ->
                       map (x ()) ~f:(fun prover_block ->
                           Backend.Run_state.set_as_prover
-                            (Option.value_exn !state) true ;
+                            (get_state ~pos:__POS__ ())
+                            true ;
                           As_prover.run_prover prover_block ) ) )
             in
-            Backend.Run_state.set_as_prover (Option.value_exn !state) true ;
+            Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
             res )
 
       let run_and_check (type a) (x : unit -> (unit -> a) As_prover.t M.t) :
@@ -1540,10 +1564,11 @@ module Run = struct
                   mark_active ~f:(fun () ->
                       map (x ()) ~f:(fun prover_block ->
                           Backend.Run_state.set_as_prover
-                            (Option.value_exn !state) true ;
+                            (get_state ~pos:__POS__ ())
+                            true ;
                           As_prover.run_prover prover_block ) ) )
             in
-            Backend.Run_state.set_as_prover (Option.value_exn !state) true ;
+            Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
             res )
     end
 
