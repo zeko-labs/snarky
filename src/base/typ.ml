@@ -172,9 +172,10 @@ struct
       Typ
         { var_to_fields =
             (fun ts ->
-              let rec go ts ((fieldss, auxes) as acc) =
+              let rec go count ts ((fieldss, auxes) as acc) =
                 match ts with
                 | [] ->
+                    assert (Int.(length = count)) ;
                     acc
                 | t :: tl ->
                     let fields, aux = var_to_fields t in
@@ -182,9 +183,9 @@ struct
                       ( Array.append fieldss fields
                       , (aux, Array.length fields) :: auxes )
                     in
-                    go tl acc
+                    go (count + 1) tl acc
               in
-              go ts ([||], []) )
+              go 0 ts ([||], []) )
         ; var_of_fields =
             (fun (fields, auxes) ->
               let vars, _ =
@@ -202,9 +203,10 @@ struct
               vars )
         ; value_to_fields =
             (fun ts ->
-              let rec go ts ((fieldss, auxes) as acc) =
+              let rec go count ts ((fieldss, auxes) as acc) =
                 match ts with
                 | [] ->
+                    assert (Int.(length = count)) ;
                     acc
                 | t :: tl ->
                     let fields, aux = value_to_fields t in
@@ -212,9 +214,9 @@ struct
                       ( Array.append fieldss fields
                       , (aux, Array.length fields) :: auxes )
                     in
-                    go tl acc
+                    go (count + 1) tl acc
               in
-              go ts ([||], []) )
+              go 0 ts ([||], []) )
         ; value_of_fields =
             (fun (fields, auxes) ->
               let vars, _ =
