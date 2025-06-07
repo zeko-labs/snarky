@@ -1127,13 +1127,17 @@ module Run = struct
     module As_prover = struct
       let global_tbl = ref None
 
-      let get_tbl ~pos:(pos_fname, pos_lnum, pos_bol, pos_cnum) () =
-        Option.value_exn
-          ~here:{ pos_fname; pos_lnum; pos_bol; pos_cnum }
-          ~message:
-            "Snark.Run: No global As_prover instance. Try wrapping in \
-             make_as_prover."
-          !global_tbl
+      let get_tbl ~loc idx : field =
+        match !global_tbl with
+        | Some tbl ->
+            tbl idx
+        | None ->
+            failwithf
+              "Snark.Run: At %s: No global As_prover instance. Try wrapping in \
+               make_as_prover. Asked for %s."
+              loc
+              (Cvar.sexp_of_t idx |> Sexp.to_string_hum)
+              ()
 
       type 'a t = 'a
 
@@ -1141,9 +1145,9 @@ module Run = struct
 
       let in_prover_block () = Option.is_some !global_tbl
 
-      let read_var var = As_prover.read_var var (get_tbl ~pos:__POS__ ())
+      let read_var var = As_prover.read_var var (get_tbl ~loc:__LOC__)
 
-      let read typ var = As_prover.read typ var (get_tbl ~pos:__POS__ ())
+      let read typ var = As_prover.read typ var (get_tbl ~loc:__LOC__)
 
       include Field.Constant.T
 
@@ -1160,8 +1164,7 @@ module Run = struct
     module Handle = struct
       type ('var, 'value) t = ('var, 'value) Handle.t
 
-      let value handle () =
-        Handle.value handle (As_prover.get_tbl ~pos:__POS__ ())
+      let value handle () = Handle.value handle (As_prover.get_tbl ~loc:__LOC__)
 
       let var = Handle.var
     end
@@ -1459,12 +1462,19 @@ module Run = struct
       |> Option.value_exn ~message:"Unhandled request"
 
     module Async_generic (Promise : Base.Monad.S) = struct
+      let get_value (t : Backend.Run_state.t) : Cvar.t -> field =
+        let get_one i = Backend.Run_state.get_variable_value t i in
+        Cvar.eval (`Return_values_will_be_mutated get_one)
+
       let run_prover ~(else_ : unit -> 'a) (f : unit -> 'a Promise.t) :
           'a Promise.t =
         if Backend.Run_state.has_witness (get_state ~pos:__POS__ ()) then (
           let old = Backend.Run_state.as_prover (get_state ~pos:__POS__ ()) in
           Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
+          let cached_tbl = !As_prover.global_tbl in
+          As_prover.global_tbl := Some (get_value @@ get_state ~pos:__POS__ ()) ;
           let%map.Promise result = f () in
+          As_prover.global_tbl := cached_tbl ;
           Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) old ;
           result )
         else Promise.return (else_ ())
