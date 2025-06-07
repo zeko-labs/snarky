@@ -223,6 +223,7 @@ struct
               else Run_state.store_field_elt s
             in
             let fields, aux = value_to_fields value in
+            assert (Int.(Array.length fields = size_in_field_elements)) ;
             let field_vars = Array.map ~f:store_value fields in
             var_of_fields (field_vars, aux)
           in
