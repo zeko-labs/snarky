@@ -133,7 +133,12 @@ struct
         let stack = Run_state.stack s in
         Option.iter (Run_state.log_constraint s) ~f:(fun f ->
             f ~at_label_boundary:(`Start, lab) None ) ;
-        let s', y = eval (t ()) (Run_state.set_stack s (lab :: stack)) in
+        let s', y =
+          try eval (t ()) (Run_state.set_stack s (lab :: stack))
+          with e ->
+            fprintf stderr "with_label: failed in %s\n" lab ;
+            raise e
+        in
         Option.iter (Run_state.log_constraint s) ~f:(fun f ->
             f ~at_label_boundary:(`End, lab) None ) ;
         (Run_state.set_stack s' stack, y) )
@@ -218,6 +223,7 @@ struct
               else Run_state.store_field_elt s
             in
             let fields, aux = value_to_fields value in
+            assert (Int.(Array.length fields = size_in_field_elements)) ;
             let field_vars = Array.map ~f:store_value fields in
             var_of_fields (field_vars, aux)
           in

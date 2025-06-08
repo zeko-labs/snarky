@@ -703,19 +703,26 @@ module Run = struct
 
     let this_functor_id = incr functor_counter ; !functor_counter
 
-    let state =
-      ref
-        (Backend.Run_state.make ~input:(field_vec ()) ~aux:(field_vec ())
-           ~eval_constraints:false ~num_inputs:0 ~next_auxiliary:(ref 0)
-           ~with_witness:false ~stack:[] ~is_running:false () )
+    let state : Backend.Run_state.t option ref = ref None
 
-    let dump () = Backend.Run_state.dump !state
+    open struct
+      let get_state ~pos:(pos_fname, pos_lnum, pos_bol, pos_cnum) () =
+        Option.value_exn
+          ~here:{ pos_fname; pos_lnum; pos_bol; pos_cnum }
+          ~message:
+            "Snark.Run: No global checked computation happening. Try wrapping \
+             in make_checked."
+          !state
+    end
 
-    let in_prover () : bool = Backend.Run_state.has_witness !state
+    let dump () = Backend.Run_state.dump @@ get_state ~pos:__POS__ ()
+
+    let in_prover () : bool =
+      Option.map ~f:Backend.Run_state.has_witness !state
+      |> Option.value ~default:false
 
     let in_checked_computation () : bool =
-      is_active_functor_id this_functor_id
-      && Backend.Run_state.is_running !state
+      is_active_functor_id this_functor_id && Option.is_some !state
 
     let run (checked : _ Checked.t) =
       match checked with
@@ -729,17 +736,22 @@ module Run = struct
                %i, but the module used to run it had internal ID %i. The same \
                instance of Snarky.Snark.Run.Make must be used for both."
               this_functor_id (active_functor_id ()) ()
-          else if not (Backend.Run_state.is_running !state) then
+          else if not (Option.is_some !state) then
             failwith
               "This function can't be run outside of a checked computation." ;
-          let state', x = Runner.run checked !state in
-          state := state' ;
+          let state' = get_state ~pos:__POS__ () in
+          state := None ;
+          let state', x = Runner.run checked state' in
+          state := Some state' ;
           x
 
     let as_stateful x state' =
-      state := state' ;
+      let cached_state = !state in
+      state := Some state' ;
       let a = x () in
-      (!state, a)
+      let new_state = get_state ~pos:__POS__ () in
+      state := cached_state ;
+      (new_state, a)
 
     let make_checked (type a) (f : unit -> a) : _ Checked.t =
       let g : run_state -> run_state * a = as_stateful f in
@@ -786,6 +798,12 @@ module Run = struct
       type nonrec 'a prover_value = 'a prover_value
 
       let prover_value = prover_value
+
+      let prover_value_map = prover_value_map
+
+      let prover_value_bind = prover_value_bind
+
+      let prover_value_return = prover_value_return
     end
 
     let constant (Typ typ : _ Typ.t) x =
@@ -1103,42 +1121,46 @@ module Run = struct
     end
 
     module As_prover = struct
+      let global_tbl = ref None
+
+      let get_tbl ~loc idx : field =
+        match !global_tbl with
+        | Some tbl ->
+            tbl idx
+        | None ->
+            failwithf
+              "Snark.Run: At %s: No global As_prover instance. Try wrapping in \
+               make_as_prover. Asked for %s."
+              loc
+              (Cvar.sexp_of_t idx |> Sexp.to_string_hum)
+              ()
+
       type 'a t = 'a
 
       type 'a as_prover = 'a t
 
-      let eval_as_prover f =
-        if
-          Backend.Run_state.as_prover !state
-          && Backend.Run_state.has_witness !state
-        then
-          let a = f (Runner.get_value !state) in
-          a
-        else failwith "Can't evaluate prover code outside an as_prover block"
+      let in_prover_block () = Option.is_some !global_tbl
 
-      let in_prover_block () = Backend.Run_state.as_prover !state
+      let read_var var = As_prover.read_var var (get_tbl ~loc:__LOC__)
 
-      let read_var var = eval_as_prover (As_prover.read_var var)
-
-      let read typ var = eval_as_prover (As_prover.read typ var)
+      let read typ var = As_prover.read typ var (get_tbl ~loc:__LOC__)
 
       include Field.Constant.T
 
-      let run_prover f _tbl =
-        (* Allow for nesting of prover blocks, by caching the current value and
-           restoring it once we're done.
-        *)
-        let old = Backend.Run_state.as_prover !state in
-        Backend.Run_state.set_as_prover !state true ;
+      let run_prover f tbl =
+        let cached_tbl = !global_tbl in
+        global_tbl := Some tbl ;
         let a = f () in
-        Backend.Run_state.set_as_prover !state old ;
+        global_tbl := cached_tbl ;
         a
     end
+
+    let make_as_prover = As_prover.run_prover
 
     module Handle = struct
       type ('var, 'value) t = ('var, 'value) Handle.t
 
-      let value handle () = As_prover.eval_as_prover (Handle.value handle)
+      let value handle () = Handle.value handle (As_prover.get_tbl ~loc:__LOC__)
 
       let var = Handle.var
     end
@@ -1215,11 +1237,15 @@ module Run = struct
 
     let handle x h =
       let h = Request.Handler.create_single h in
-      let handler = Backend.Run_state.handler !state in
+      let handler = Backend.Run_state.handler @@ get_state ~pos:__POS__ () in
       state :=
-        Backend.Run_state.set_handler !state (Request.Handler.push handler h) ;
+        Some
+          (Backend.Run_state.set_handler
+             (get_state ~pos:__POS__ ())
+             (Request.Handler.push handler h) ) ;
       let a = x () in
-      state := Backend.Run_state.set_handler !state handler ;
+      state :=
+        Some (Backend.Run_state.set_handler (get_state ~pos:__POS__ ()) handler) ;
       a
 
     let handle_as_prover x h =
@@ -1229,15 +1255,27 @@ module Run = struct
     let if_ b ~typ ~then_ ~else_ = run (if_ b ~typ ~then_ ~else_)
 
     let with_label lbl x =
-      let stack = Backend.Run_state.stack !state in
-      let log_constraint = Backend.Run_state.log_constraint !state in
-      state := Backend.Run_state.set_stack !state (lbl :: stack) ;
+      let stack = Backend.Run_state.stack @@ get_state ~pos:__POS__ () in
+      let log_constraint =
+        Backend.Run_state.log_constraint @@ get_state ~pos:__POS__ ()
+      in
+      state :=
+        Some
+          (Backend.Run_state.set_stack
+             (get_state ~pos:__POS__ ())
+             (lbl :: stack) ) ;
       Option.iter log_constraint ~f:(fun f ->
           f ~at_label_boundary:(`Start, lbl) None ) ;
-      let a = x () in
+      let a =
+        try x ()
+        with e ->
+          fprintf stderr "with_label: failed in %s\n" lbl ;
+          raise e
+      in
       Option.iter log_constraint ~f:(fun f ->
           f ~at_label_boundary:(`End, lbl) None ) ;
-      state := Backend.Run_state.set_stack !state stack ;
+      state :=
+        Some (Backend.Run_state.set_stack (get_state ~pos:__POS__ ()) stack) ;
       a
 
     let inject_wrapper :
@@ -1292,7 +1330,7 @@ module Run = struct
         cached_state := Some !state ;
         builder.run_computation (fun input state' ->
             (* Partial [as_stateful]. *)
-            state := state' ;
+            state := Some state' ;
             (* Partial [mark_active]. *)
             let counters = !active_counters in
             cached_active_counters := Some counters ;
@@ -1310,7 +1348,7 @@ module Run = struct
         (* Create an invalid state, to avoid re-runs. *)
         cached_active_counters := None ;
         (* Partial [as_stateful]. *)
-        let state' = !state in
+        let state' = get_state ~pos:__POS__ () in
         let res = builder.finish_computation (state', return_var) in
         (* Partial [finalize_is_running]. *)
         state := Option.value_exn !cached_state ;
@@ -1352,7 +1390,7 @@ module Run = struct
         cached_state := Some !state ;
         builder.run_computation (fun input state' ->
             (* Partial [as_stateful]. *)
-            state := state' ;
+            state := Some state' ;
             (* Partial [mark_active]. *)
             let counters = !active_counters in
             cached_active_counters := Some counters ;
@@ -1370,7 +1408,7 @@ module Run = struct
         (* Create an invalid state, to avoid re-runs. *)
         cached_active_counters := None ;
         (* Partial [as_stateful]. *)
-        let state' = !state in
+        let state' = get_state ~pos:__POS__ () in
         let res = builder.finish_witness_generation (state', return_var) in
         (* Partial [finalize_is_running]. *)
         state := Option.value_exn !cached_state ;
@@ -1381,7 +1419,7 @@ module Run = struct
     (* start an as_prover / exists block and return a function to finish it and witness a given list of fields *)
     let as_prover_manual (size_to_witness : int) :
         (field array option -> Field.t array) Staged.t =
-      let s = !state in
+      let s = get_state ~pos:__POS__ () in
       let old_as_prover = Backend.Run_state.as_prover s in
       (* enter the as_prover block *)
       Backend.Run_state.set_as_prover s true ;
@@ -1414,17 +1452,26 @@ module Run = struct
       Staged.stage finish_computation
 
     let request_manual (req : unit -> 'a Request.t) () : 'a =
-      Request.Handler.run (Backend.Run_state.handler !state) (req ())
+      Request.Handler.run
+        (Backend.Run_state.handler @@ get_state ~pos:__POS__ ())
+        (req ())
       |> Option.value_exn ~message:"Unhandled request"
 
     module Async_generic (Promise : Base.Monad.S) = struct
+      let get_value (t : Backend.Run_state.t) : Cvar.t -> field =
+        let get_one i = Backend.Run_state.get_variable_value t i in
+        Cvar.eval (`Return_values_will_be_mutated get_one)
+
       let run_prover ~(else_ : unit -> 'a) (f : unit -> 'a Promise.t) :
           'a Promise.t =
-        if Backend.Run_state.has_witness !state then (
-          let old = Backend.Run_state.as_prover !state in
-          Backend.Run_state.set_as_prover !state true ;
+        if Backend.Run_state.has_witness (get_state ~pos:__POS__ ()) then (
+          let old = Backend.Run_state.as_prover (get_state ~pos:__POS__ ()) in
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
+          let cached_tbl = !As_prover.global_tbl in
+          As_prover.global_tbl := Some (get_value @@ get_state ~pos:__POS__ ()) ;
           let%map.Promise result = f () in
-          Backend.Run_state.set_as_prover !state old ;
+          As_prover.global_tbl := cached_tbl ;
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) old ;
           result )
         else Promise.return (else_ ())
 
@@ -1444,10 +1491,12 @@ module Run = struct
             Perform.run_and_check_exn ~run:as_stateful (fun () ->
                 mark_active ~f:(fun () ->
                     let prover_block = x () in
-                    Backend.Run_state.set_as_prover !state true ;
+                    Backend.Run_state.set_as_prover
+                      (get_state ~pos:__POS__ ())
+                      true ;
                     As_prover.run_prover prover_block ) )
           in
-          Backend.Run_state.set_as_prover !state true ;
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
           res )
 
     let run_and_check (type a) (x : unit -> (unit -> a) As_prover.t) :
@@ -1457,10 +1506,12 @@ module Run = struct
             Perform.run_and_check ~run:as_stateful (fun () ->
                 mark_active ~f:(fun () ->
                     let prover_block = x () in
-                    Backend.Run_state.set_as_prover !state true ;
+                    Backend.Run_state.set_as_prover
+                      (get_state ~pos:__POS__ ())
+                      true ;
                     As_prover.run_prover prover_block ) )
           in
-          Backend.Run_state.set_as_prover !state true ;
+          Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
           res )
 
     module Run_and_check_deferred (M : sig
@@ -1487,8 +1538,12 @@ module Run = struct
                  x ) )
 
       let as_stateful x state' =
-        state := state' ;
-        map (x ()) ~f:(fun a -> (!state, a))
+        let cached_state = !state in
+        state := Some state' ;
+        map (x ()) ~f:(fun a ->
+            let new_state = get_state ~pos:__POS__ () in
+            state := cached_state ;
+            (new_state, a) )
 
       let run_and_check_exn (type a) (x : unit -> (unit -> a) As_prover.t M.t) :
           a M.t =
@@ -1498,10 +1553,12 @@ module Run = struct
               run_and_check_exn ~run:as_stateful (fun () ->
                   mark_active ~f:(fun () ->
                       map (x ()) ~f:(fun prover_block ->
-                          Backend.Run_state.set_as_prover !state true ;
+                          Backend.Run_state.set_as_prover
+                            (get_state ~pos:__POS__ ())
+                            true ;
                           As_prover.run_prover prover_block ) ) )
             in
-            Backend.Run_state.set_as_prover !state true ;
+            Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
             res )
 
       let run_and_check (type a) (x : unit -> (unit -> a) As_prover.t M.t) :
@@ -1512,10 +1569,12 @@ module Run = struct
               run_and_check ~run:as_stateful (fun () ->
                   mark_active ~f:(fun () ->
                       map (x ()) ~f:(fun prover_block ->
-                          Backend.Run_state.set_as_prover !state true ;
+                          Backend.Run_state.set_as_prover
+                            (get_state ~pos:__POS__ ())
+                            true ;
                           As_prover.run_prover prover_block ) ) )
             in
-            Backend.Run_state.set_as_prover !state true ;
+            Backend.Run_state.set_as_prover (get_state ~pos:__POS__ ()) true ;
             res )
     end
 
@@ -1542,9 +1601,10 @@ module Run = struct
       (* TODO(mrmr1993): Enable label-level logging for the imperative API. *)
       let old = !state in
       state :=
-        Runner.State.make ~num_inputs:0 ~input:Vector.null ~aux:Vector.null
-          ~next_auxiliary:(ref 0) ~eval_constraints:false ~with_witness:false
-          ~log_constraint () ;
+        Some
+          (Runner.State.make ~num_inputs:0 ~input:Vector.null ~aux:Vector.null
+             ~next_auxiliary:(ref 0) ~eval_constraints:false ~with_witness:false
+             ~log_constraint () ) ;
       ignore (mark_active ~f:x) ;
       state := old ;
       !count

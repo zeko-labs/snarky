@@ -256,6 +256,13 @@ module type Typ_intf = sig
           [Checked] world to pass through [As_prover] blocks.
     *)
   val prover_value : unit -> ('a prover_value, 'a) t
+
+  val prover_value_map : 'a prover_value -> f:('a -> 'b) -> 'b prover_value
+
+  val prover_value_bind :
+    'a prover_value -> f:('a -> 'b prover_value) -> 'b prover_value
+
+  val prover_value_return : 'a -> 'a prover_value
 end
 
 module type Constraint_intf = sig
@@ -1313,6 +1320,8 @@ module type Run_basic = sig
   val with_label : string -> (unit -> 'a) -> 'a
 
   val make_checked : (unit -> 'a) -> 'a Internal_Basic.Checked.t
+
+  val make_as_prover : (unit -> 'a) As_prover.t -> 'a Internal_Basic.As_prover.t
 
   val constraint_system :
        input_typ:('input_var, 'input_value) Typ.t

@@ -45,7 +45,6 @@ module type S = sig
     -> ?handler:Request.Handler.t
     -> with_witness:bool
     -> ?stack:string list
-    -> ?is_running:bool
     -> unit
     -> t
 
@@ -84,10 +83,6 @@ module type S = sig
   val handler : t -> Request.Handler.t
 
   val set_handler : t -> Request.Handler.t -> t
-
-  val is_running : t -> bool
-
-  val set_is_running : t -> bool -> t
 
   val next_auxiliary : t -> int
 end
